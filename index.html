@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flappy Lolipop</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background-color: #87CEEB; /* Sky Blue */
+            margin: 0;
+            font-family: 'Press Start 2P', cursive;
+            color: white;
+            overflow: hidden; /* Hide scrollbars */
+        }
+        .game-container {
+            position: relative;
+            border: 5px solid #333;
+            border-radius: 10px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+            background-color: #70c1b3; /* A lighter shade for contrast */
+            overflow: hidden; /* Ensure canvas content stays within borders */
+        }
+        canvas {
+            display: block;
+            background-image: url('https://www.transparenttextures.com/patterns/light-paper-fibers.png'); /* Subtle background texture */
+            border-radius: 5px; /* Rounded corners for canvas inside container */
+        }
+        .ui-element {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            text-shadow: 2px 2px #000000;
+        }
+        #score {
+            top: 20px;
+            font-size: 1.5em;
+        }
+        #instructions {
+            bottom: 70px; /* Adjusted to not overlap button */
+            font-size: 0.8em;
+            width: 90%;
+        }
+        #startButton, #restartButton {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            padding: 15px 30px;
+            font-size: 1.2em;
+            color: white;
+            background-color: #FF6347; /* Tomato */
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 5px #c0402c;
+            transition: all 0.1s ease;
+            font-family: 'Press Start 2P', cursive;
+        }
+        #startButton:active, #restartButton:active {
+            box-shadow: 0 2px #c0402c;
+            transform: translate(-50%, calc(-50% + 3px));
+        }
+        #message {
+            top: 40%;
+            font-size: 1.5em;
+            color: #FF4500; /* OrangeRed */
+        }
+        #userIdDisplay {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 0.7em;
+            color: white;
+            z-index: 100;
+        }
+        /* Responsive adjustments */
+        @media (max-width: 600px) {
+            .game-container {
+                width: 95vw;
+                height: 70vh; /* Ensure it fits on smaller screens */
+            }
+            canvas {
+                 width: 100%;
+                 height: 100%;
+            }
+            #score { font-size: 1.2em; }
+            #instructions { font-size: 0.7em; bottom: 60px;}
+            #startButton, #restartButton { font-size: 1em; padding: 12px 24px; }
+            #message { font-size: 1.2em; }
+        }
+    </style>
+</head>
+<body>
+    <div id="userIdDisplay" style="display: none;">User ID: <span id="userIdValue"></span></div>
+
+    <div class="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="score" class="ui-element">Score: 0</div>
+        <div id="instructions" class="ui-element">Click or Tap to Fly Up</div>
+        <div id="message" class="ui-element" style="display: none;"></div>
+        <button id="startButton">Start Game</button>
+        <button id="restartButton" style="display:none;">Restart Game</button>
+    </div>
+
+    <script type="module">
+        // Firebase Imports (ensure you have these in your actual project setup if using extensively)
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, addDoc, serverTimestamp, onSnapshot, query, where, getDocs, updateDoc, deleteDoc, writeBatch, runTransaction, increment } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Setup ---
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "YOUR_API_KEY", authDomain: "YOUR_AUTH_DOMAIN", projectId: "YOUR_PROJECT_ID" }; // Fallback config
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'flappy-lolipop-default';
+        let userId = null;
+
+        async function setupAuth() {
+            try {
+                await setPersistence(auth, inMemoryPersistence); // Use in-memory persistence
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Firebase Auth Error:", error);
+                 // Fallback to anonymous sign-in if custom token fails or is not present
+                try {
+                    await signInAnonymously(auth);
+                } catch (anonError) {
+                    console.error("Firebase Anonymous Auth Error:", anonError);
+                }
+            }
+
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    userId = user.uid;
+                    document.getElementById('userIdValue').textContent = userId;
+                    document.getElementById('userIdDisplay').style.display = 'block';
+                    // console.log("User ID:", userId);
+                } else {
+                    userId = 'anonymous-' + crypto.randomUUID(); // Fallback if auth fails
+                    document.getElementById('userIdValue').textContent = userId;
+                    document.getElementById('userIdDisplay').style.display = 'block';
+                    // console.log("No user signed in, using generated ID:", userId);
+                }
+            });
+        }
+        setupAuth();
+
+
+        // --- Game Code ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score');
+        const instructionsDisplay = document.getElementById('instructions');
+        const messageDisplay = document.getElementById('message');
+        const startButton = document.getElementById('startButton');
+        const restartButton = document.getElementById('restartButton');
+
+        const birdImage = new Image();
+        birdImage.src = 'lolipop_icon.png'; // Path to your bird image
+        let birdImageLoaded = false;
+        const fallbackBirdColor = '#FFC0CB'; // Pink, if image fails
+
+        birdImage.onload = () => {
+            birdImageLoaded = true;
+        };
+        birdImage.onerror = () => {
+            console.warn("Failed to load bird image. Using fallback color.");
+            birdImageLoaded = false; // Explicitly set to false, will use fallback
+        };
+
+
+        let gameContainer = document.querySelector('.game-container');
+
+        function resizeCanvas() {
+            const containerWidth = gameContainer.clientWidth;
+            const containerHeight = gameContainer.clientHeight;
+            
+            // Maintain a 16:9 aspect ratio for gameplay, fitting within container
+            let canvasWidth = containerWidth;
+            let canvasHeight = containerWidth * (9 / 16);
+
+            if (canvasHeight > containerHeight) {
+                canvasHeight = containerHeight;
+                canvasWidth = containerHeight * (16 / 9);
+            }
+            
+            // Ensure canvas doesn't exceed container width if height is the limiting factor
+            if (canvasWidth > containerWidth) {
+                canvasWidth = containerWidth;
+                canvasHeight = containerWidth * (9/16);
+            }
+
+
+            canvas.width = canvasWidth;
+            canvas.height = canvasHeight;
+
+            // Recalculate game elements based on new canvas size if needed
+            if (gameState !== 'start') { // Avoid resetting if game hasn't started
+                // Example: bird.y = canvas.height / 2;
+                // You might need to adjust positions of elements if game is active
+            }
+        }
+
+
+        // Game variables
+        let bird, pipes, score, gameState, frame;
+        let gravity, lift, pipeSpeed, pipeGap, pipeWidth, pipeFrequency;
+
+
+        function initializeGameVariables() {
+            // Bird properties
+            bird = {
+                x: canvas.width / 4,
+                y: canvas.height / 2,
+                radius: canvas.height * 0.035, // Responsive radius
+                velocityY: 0
+            };
+
+            // Physics and game mechanics constants
+            gravity = canvas.height * 0.001;    // Proportional to canvas height
+            lift = canvas.height * -0.025;      // Proportional to canvas height for consistent jump
+            pipeSpeed = canvas.width * 0.005;   // Proportional to canvas width
+            pipeGap = canvas.height * 0.25;     // Gap between pipes
+            pipeWidth = canvas.width * 0.15;    // Width of pipes
+            pipeFrequency = 100; // Frames between new pipes, could be adjusted by difficulty
+            
+            pipes = [];
+            score = 0;
+            gameState = 'start'; // 'start', 'playing', 'gameOver'
+            frame = 0;
+            scoreDisplay.textContent = 'Score: 0';
+            messageDisplay.style.display = 'none';
+            instructionsDisplay.style.display = 'block';
+            restartButton.style.display = 'none';
+            startButton.style.display = 'block';
+        }
+        
+        // Call resize and initialize
+        window.addEventListener('resize', () => {
+            resizeCanvas();
+            if (gameState === 'start' || gameState === 'gameOver') { // Re-init only if not actively playing
+                initializeGameVariables(); // Re-init with new sizes
+                if (gameState === 'gameOver') drawGameOverScreen(); // Redraw game over with new sizes
+                else if (gameState === 'start') drawStartScreen();
+            }
+        });
+        resizeCanvas(); // Initial size
+        initializeGameVariables(); // Initial game variables
+
+        // --- Drawing Functions ---
+        function drawBird() {
+            ctx.beginPath();
+            if (birdImageLoaded && birdImage.complete) {
+                // Draw image, adjusting for radius to roughly center it
+                // The image is 64x64, scale it to be roughly 2*radius
+                const aspectRatio = birdImage.width / birdImage.height;
+                let drawWidth = bird.radius * 2.5;
+                let drawHeight = drawWidth / aspectRatio;
+                if (isNaN(drawHeight)) drawHeight = bird.radius * 2.5;
+
+
+                ctx.drawImage(birdImage, bird.x - drawWidth / 2, bird.y - drawHeight / 2, drawWidth, drawHeight);
+            } else {
+                // Fallback: simple circle
+                ctx.arc(bird.x, bird.y, bird.radius, 0, Math.PI * 2);
+                ctx.fillStyle = fallbackBirdColor;
+                ctx.fill();
+            }
+            ctx.closePath();
+        }
+
+        function drawPipes() {
+            ctx.fillStyle = '#008000'; // Green for pipes
+            pipes.forEach(pipe => {
+                // Top pipe
+                ctx.fillRect(pipe.x, 0, pipe.width, pipe.topHeight);
+                // Bottom pipe
+                ctx.fillRect(pipe.x, pipe.topHeight + pipe.gap, pipe.width, canvas.height - (pipe.topHeight + pipe.gap));
+            });
+        }
+
+        function drawScore() {
+            scoreDisplay.textContent = 'Score: ' + score;
+        }
+
+        function drawStartScreen() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBird(); // Show bird in initial position
+            instructionsDisplay.style.display = 'block';
+            startButton.style.display = 'block';
+            restartButton.style.display = 'none';
+            messageDisplay.style.display = 'none';
+            drawScore();
+        }
+
+        function drawGameOverScreen() {
+            messageDisplay.textContent = 'Game Over!';
+            messageDisplay.style.display = 'block';
+            instructionsDisplay.style.display = 'none';
+            startButton.style.display = 'none';
+            restartButton.style.display = 'block';
+             // Optionally draw final bird position and pipes
+            drawBird();
+            drawPipes();
+            drawScore();
+        }
+
+        // --- Update Functions ---
+        function updateBird() {
+            bird.velocityY += gravity;
+            bird.y += bird.velocityY;
+
+            // Prevent bird from going off screen (top/bottom)
+            if (bird.y + bird.radius > canvas.height) {
+                bird.y = canvas.height - bird.radius;
+                bird.velocityY = 0;
+                endGame();
+            }
+            if (bird.y - bird.radius < 0) {
+                bird.y = bird.radius;
+                bird.velocityY = 0;
+                // Some games end on hitting top, some just stop upward motion
+                // For this version, let's not end game on top collision but stop motion
+            }
+        }
+
+        function updatePipes() {
+            if (frame % pipeFrequency === 0) {
+                const minTopHeight = canvas.height * 0.15; // Min height for top pipe
+                const maxTopHeight = canvas.height * 0.6;  // Max height for top pipe
+                const topHeight = Math.random() * (maxTopHeight - minTopHeight) + minTopHeight;
+                pipes.push({
+                    x: canvas.width,
+                    width: pipeWidth,
+                    topHeight: topHeight,
+                    gap: pipeGap,
+                    scored: false
+                });
+            }
+
+            pipes.forEach(pipe => {
+                pipe.x -= pipeSpeed;
+
+                // Scoring
+                if (!pipe.scored && pipe.x + pipe.width < bird.x - bird.radius) {
+                    score++;
+                    pipe.scored = true;
+                    drawScore();
+                }
+            });
+
+            // Remove off-screen pipes
+            pipes = pipes.filter(pipe => pipe.x + pipe.width > 0);
+        }
+
+        // --- Collision Detection ---
+        function checkCollisions() {
+            // Bird with pipes
+            for (let pipe of pipes) {
+                // Check X collision
+                if (bird.x + bird.radius > pipe.x && bird.x - bird.radius < pipe.x + pipe.width) {
+                    // Check Y collision (top pipe or bottom pipe)
+                    if (bird.y - bird.radius < pipe.topHeight || bird.y + bird.radius > pipe.topHeight + pipe.gap) {
+                        return true; // Collision detected
+                    }
+                }
+            }
+            return false; // No collision
+        }
+
+        // --- Game State Management ---
+        function startGame() {
+            resizeCanvas(); // Ensure canvas is sized correctly before starting
+            initializeGameVariables(); // Re-init variables based on current canvas size
+            gameState = 'playing';
+            instructionsDisplay.style.display = 'none';
+            startButton.style.display = 'none';
+            messageDisplay.style.display = 'none';
+            if (gameLoopId) cancelAnimationFrame(gameLoopId); // Clear previous loop if any
+            gameLoop();
+        }
+
+        function endGame() {
+            if (gameState === 'gameOver') return; // Prevent multiple calls
+            gameState = 'gameOver';
+            drawGameOverScreen();
+            // console.log("Final Score:", score);
+            // Here you could save the score to Firebase if desired
+            // Example: saveScoreToFirestore(userId, score);
+        }
+
+
+        // --- Input Handling ---
+        function handleInput() {
+            if (gameState === 'playing') {
+                bird.velocityY = lift;
+            }
+        }
+
+        canvas.addEventListener('click', handleInput);
+        canvas.addEventListener('touchstart', (event) => {
+            event.preventDefault(); // Prevent click event from firing too
+            handleInput();
+        }, { passive: false }); // passive:false for preventDefault
+
+        startButton.addEventListener('click', startGame);
+        restartButton.addEventListener('click', startGame); // Restarting is essentially starting a new game
+
+        // --- Game Loop ---
+        let gameLoopId;
+        function gameLoop() {
+            if (gameState !== 'playing') {
+                 if (gameState === 'start') drawStartScreen();
+                 else if (gameState === 'gameOver') drawGameOverScreen();
+                 return;
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            updateBird();
+            updatePipes();
+
+            drawBird();
+            drawPipes();
+            drawScore();
+
+            if (checkCollisions()) {
+                endGame();
+            }
+
+            frame++;
+            gameLoopId = requestAnimationFrame(gameLoop);
+        }
+        
+        // Initial draw of start screen
+        drawStartScreen();
+
+        // Example Firestore function (optional, for future use)
+        // async function saveScoreToFirestore(uid, gameScore) {
+        //     if (!uid) {
+        //         console.log("User not authenticated, cannot save score.");
+        //         return;
+        //     }
+        //     try {
+        //         const scoresCollection = collection(db, `artifacts/${appId}/users/${uid}/flappyScores`);
+        //         await addDoc(scoresCollection, {
+        //             score: gameScore,
+        //             timestamp: serverTimestamp()
+        //         });
+        //         console.log("Score saved for user:", uid);
+        //     } catch (error) {
+        //         console.error("Error saving score:", error);
+        //     }
+        // }
+
+    </script>
+</body>
+</html>
